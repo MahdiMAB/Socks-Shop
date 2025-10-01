@@ -43,12 +43,12 @@ Le dépôt regroupe tous les artefacts nécessaires pour le déploiement E2E (En
 
 ---
 
----
-## 📈 Améliorations Futures et Amélioration Continue
+##  Améliorations Futures et Amélioration Continue
 
-Ce projet sert de base solide pour une architecture DevOps complète. Mon engagement se poursuit à travers l'exploration et l'intégration des axes d'amélioration suivants :
+Ce projet sert de base solide, et mon engagement se poursuit à travers l'exploration et l'intégration des axes d'amélioration suivants, axés sur la **stabilisation**, la **sécurité** et la **qualité opérationnelle** :
 
-1.  **Observabilité Avancée :** Implémentation de Jaeger pour le Tracing distribué afin de monitorer le flux de requêtes à travers l'ensemble des microservices.
-2.  **GitOps avec ArgoCD :** Migration de la phase de déploiement (actuellement via Jenkins) vers un modèle GitOps en utilisant ArgoCD pour une gestion du déploiement plus déclarative et résiliente sur Kubernetes.
-3.  **Gestion des Secrets :** Remplacement de l'approche actuelle par une solution plus robuste et centralisée telle que **Vault** (HashiCorp) pour la gestion dynamique des secrets de l'application.
-4.  **Optimisation des Coûts AWS :** Exploration des stratégies d'optimisation des coûts (Spot Instances, Karpenter) au niveau du cluster EKS.
+1.  **Fiabilisation de l'Observabilité :** Finaliser l'intégration de **Prometheus et Grafana** pour garantir le monitoring fiable des métriques du cluster EKS et des applications, et offrir une vue opérationnelle complète.
+2.  **Gestion des Secrets :** Intégrer **HashiCorp Vault** pour remplacer les secrets statiques et centraliser la gestion des credentials, renforçant ainsi la sécurité de l'architecture.
+3.  **Optimisations Kubernetes :** Réaliser des ajustements dans les manifestes K8s (Helm charts) pour améliorer la résilience, l'efficacité des ressources (requests/limits) et l'alignement avec les meilleures pratiques.
+
+L'objectif est de toujours maintenir ce dépôt comme une solution de référence, démontrant mon engagement pour l'**amélioration continue** de la qualité logicielle et opérationnelle.
