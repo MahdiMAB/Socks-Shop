@@ -1,0 +1,430 @@
+pipeline {
+    environment {
+        DOCKER_ID = "socksshop"
+        DOCKER_IMAGE = "front-end"
+        DOCKER_TAG = "v.${BUILD_ID}.0"
+        // DOCKER_TAG = "latest"
+        AWS_REGION = 'us-east-1'
+        CLUSTER_NAME = 'sockshop-eks'
+        CHART_NAME = 'helm-charts/frontend/'
+        RELEASE_NAME = 'socksshop-frontend'
+    }
+
+    agent any
+
+    stages {
+
+        stage('Define deployment environment') {
+            steps {
+                script {
+                    def currentBranch = env.GIT_BRANCH
+                    def namespace = ''
+
+                    if (currentBranch == 'origin/main') {
+                        namespace = 'dev'
+                    } else if (currentBranch == 'origin/staging') {
+                        namespace = 'staging'
+                    } else if (currentBranch == 'origin/prod') {
+                        namespace = 'prod'
+                    } else {
+                        error "Branche '${currentBranch}' non gérée pour la définition du namespace."
+                    }
+
+                    env.NAMESPACE = namespace
+                    echo "Le namespace défini pour cette exécution est : ${env.NAMESPACE}"
+                }
+            }
+        }
+
+
+
+/////////////////////// CONTINUOUS INTEGRATION (CI) /////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+        // stage('Build frontend image') {
+        //     steps {
+        //         script {
+        //             sh """
+        //             docker build --no-cache -t $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG .
+        //             docker tag $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG $DOCKER_ID/$DOCKER_IMAGE:latest
+        //             sleep 4
+        //             docker save $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG -o ${DOCKER_IMAGE}.tar
+        //             """
+        //             stash(name: 'docker-image', includes: "${DOCKER_IMAGE}.tar")
+        //         }
+        //     }
+        // }
+
+        // stage('Scan Image') {
+        //     agent {
+        //         docker {
+        //             image 'socksshop/docker-trivy:latest'
+        //             args '-v /var/run/docker.sock:/var/run/docker.sock --user root'
+        //         }
+        //     }
+        //     steps {
+        //         unstash 'docker-image'
+        //         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+        //             sh """
+        //             ls -lah
+        //             docker load -i ${DOCKER_IMAGE}.tar
+        //             trivy image --severity HIGH,CRITICAL --scanners vuln --timeout 10m $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG
+        //             """
+        //         }
+        //     }
+        // }
+
+        // stage('Run and Test frontend container') {
+        //     steps {
+        //         script {
+        //             sh '''
+        //             docker rm -f socksshop-frontend || true
+        //             docker run -d --name socksshop-frontend -p 8079:8079 $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG
+        //             sleep 15
+        //             curl -s -o /dev/null -w "%{http_code}" http://localhost:8079 | grep 200
+        //             curl http://localhost:8079 | grep "WeaveSocks"
+        //             '''
+        //         }
+        //     }
+        // }
+
+        // stage('Push frontend image on DockerHub') {
+        //     environment {
+        //         DOCKERHUB_PASSWORD = credentials("DOCKERHUB_PASSWORD")
+        //     }
+        //     steps {
+        //         script {
+        //             sh '''
+        //             echo $DOCKERHUB_PASSWORD | docker login -u $DOCKER_ID --password-stdin
+        //             docker push $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG
+        //             docker push $DOCKER_ID/$DOCKER_IMAGE:latest
+        //             '''
+        //         }
+        //     }
+        // }
+
+//         stage('Cleanup Docker') {
+//             steps {
+//                 script {
+//                     sh '''
+//                     docker stop socksshop-frontend || true
+//                     docker rm socksshop-frontend || true
+//                     docker rmi $DOCKER_ID/$DOCKER_IMAGE:$DOCKER_TAG || true
+//                     docker rmi $DOCKER_ID/$DOCKER_IMAGE:latest || true
+//                     '''
+//                 }
+//             }
+//         }
+
+
+
+///////////////////////// CONTINUOUS DELIVERY (CD) //////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+
+        stage('Pre-deployment backups') {
+            parallel {
+
+                stage('Backup cluster') {
+                    agent {
+                        docker {
+                            image 'socksshop/aws-cli-velero:latest'
+                            args '-u root -v $HOME/.kube:/root/.kube'
+                        }
+                    }
+                    steps {
+                        script {
+                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                                    sh '''
+                                    aws eks --region $AWS_REGION update-kubeconfig --name $CLUSTER_NAME
+                                    chmod 600 /root/.kube/config
+
+                                    velero backup create frontend-pre-deploy-backup-${NAMESPACE}-${BUILD_NUMBER} --include-namespaces=${NAMESPACE}
+                                    '''
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Confirm Prod deployment - AWS EKS - Frontend') {
+            when {
+                environment name: 'NAMESPACE', value: 'prod'
+            }
+            steps {
+                script {
+                    input message: "Vous vous apprêtez à déployer dans l’environnement de ${env.NAMESPACE}, voulez-vous continuer ? Cliquez sur 'Proceed' pour confirmer.",
+                        ok: 'Proceed'
+                }
+            }
+        }
+
+        stage('Frontend deployment + Monitoring ingress - AWS EKS') {
+            agent {
+                docker {
+                    image 'socksshop/aws-cli-git-kubectl-helm:latest'
+                    args '-u root -v $HOME/.kube:/root/.kube'
+                }
+            }
+            steps {
+                withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    sh '''
+                    aws eks --region $AWS_REGION update-kubeconfig --name $CLUSTER_NAME
+                    chmod 600 /root/.kube/config
+                    kubectl config current-context
+
+                    rm -Rf helm-charts
+                    git clone https://$GITHUB_USERNAME:$GITHUB_PASSWORD@github.com/socks-shops/helm-charts.git helm-charts
+
+                    helm lint $CHART_NAME -f $CHART_NAME/values-${NAMESPACE}.yaml
+                    helm upgrade --install $RELEASE_NAME $CHART_NAME --namespace $NAMESPACE -f $CHART_NAME/values-${NAMESPACE}.yaml
+
+                    helm upgrade --install sockshop-monitoring helm-charts/monitoring/ --namespace monitoring
+
+                    sleep 10
+
+                    kubectl rollout restart deployment/front-end -n ${NAMESPACE}
+
+                    sleep 10
+
+                    kubectl get pods -n ${NAMESPACE} -l name=front-end
+
+                    echo "Attente du pod prêt..."
+
+                    # Attendre jusqu'à 6 minutes max (tentative toutes les 60 secondes)
+                    for i in $(seq 1 6); do
+                        POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l name=front-end --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+                        if [ -z "$POD_NAME" ]; then
+                            echo "Aucun pod trouvé, tentative suivante dans 60 secondes..."
+                        else
+                            READY_STATUS=$(kubectl get pod "$POD_NAME" -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].ready}')
+
+                            if [ "$READY_STATUS" = "true" ]; then
+                                echo "Pod prêt trouvé : $POD_NAME"
+                                break
+                            fi
+
+                            echo "Pod non prêt, attente 60 secondes..."
+                        fi
+
+                        sleep 60
+                    done
+
+                    if [ -z "$POD_NAME" ] || [ "$READY_STATUS" != "true" ]; then
+                        echo "Erreur : Aucun pod prêt après 6 minutes."
+                        exit 1
+                    fi
+
+                    echo "Pod Ready !"
+
+                    kubectl get all -n $NAMESPACE
+                    kubectl get all -n monitoring
+                    '''
+                }
+            }
+        }
+
+        stage('Setup DNS - Dynu') {
+            agent {
+                docker {
+                    image 'socksshop/aws-cli-curl-node-kubectl-yarn-jq:latest'
+                    args '-u root -v $HOME/.kube:/root/.kube'
+                }
+            }
+            environment {
+                DYNU_DOMAIN_ID = credentials('DYNU_DOMAIN_ID')
+                DOMAIN_NAME = credentials('DOMAIN_NAME')
+            }
+            steps {
+                script {
+                    def subdomains = ['www', 'grafana', 'prometheus']
+
+                    withCredentials([
+                        string(credentialsId: 'DYNU_USERNAME', variable: 'DYNU_USERNAME_SAFE'),
+                        string(credentialsId: 'DYNU_API_KEY', variable: 'DYNU_API_KEY_SAFE')
+                    ]) {
+                        withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                            sh "aws eks --region ${AWS_REGION} update-kubeconfig --name ${CLUSTER_NAME}"
+
+                            echo "⏳ Waiting 120 seconds for DNS propagation..."
+                            sleep 120
+
+                            def albDns = sh(
+                                script: "kubectl get ingress front-end -n ${NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                                returnStdout: true
+                            ).trim()
+
+                            subdomains.each { sub ->
+                                echo "🔄 Vérification et mise à jour de l'enregistrement CNAME pour ${sub}.${env.DOMAIN_NAME} → ${albDns}"
+
+                                // Step 1: Check if the CNAME record for the subdomain already exists
+                                def getRecordResponse = sh(
+                                    script: """
+                                        curl -s -X GET "https://api.dynu.com/v2/dns/${env.DYNU_DOMAIN_ID}/record" \\
+                                        -H "Accept: application/json" \\
+                                        -H "API-Key: ${DYNU_API_KEY_SAFE}" \\
+                                        -u "${DYNU_USERNAME_SAFE}:${DYNU_API_KEY_SAFE}"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                                // Parse JSON to find the record ID
+                                def recordId = sh(
+                                    script: "echo '${getRecordResponse}' | jq -r '.dnsRecords[] | select(.hostname == \"${sub}.${env.DOMAIN_NAME}\" and .recordType == \"CNAME\") | .id'",
+                                    returnStdout: true
+                                ).trim()
+
+                                def apiResponse
+                                def method = "POST"
+                                def urlSuffix = ""
+
+                                if (recordId) {
+                                    echo "  ➡️ Enregistrement CNAME existant trouvé avec ID : ${recordId}. Mise à jour..."
+                                    urlSuffix = "/${recordId}"
+                                } else {
+                                    echo "  ➡️ Enregistrement CNAME non trouvé. Création du nouvel enregistrement..."
+                                }
+
+                                // --- CRÉATION/MISE À JOUR DE L'ENREGISTREMENT CNAME ---
+                                echo "  ➡️ Envoi de la requête ${method} à Dynu..."
+                                apiResponse = sh(
+                                    script: """
+                                        curl -s -X ${method} "https://api.dynu.com/v2/dns/${env.DYNU_DOMAIN_ID}/record${urlSuffix}" \\
+                                        -H "Content-Type: application/json" \\
+                                        -H "Accept: application/json" \\
+                                        -H "API-Key: ${DYNU_API_KEY_SAFE}" \\
+                                        -u "${DYNU_USERNAME_SAFE}:${DYNU_API_KEY_SAFE}" \\
+                                        -d '{
+                                            "nodeName": "${sub}",                 // La partie spécifique du sous-domaine (ex: "www")
+                                            "hostname": "${env.DOMAIN_NAME}",     // Le nom de domaine principal (ex: "sockshop.loseyourip.com")
+                                            "recordType": "CNAME",
+                                            "ttl": 300,
+                                            "state": true,
+                                            "host": "${albDns}"                  // La cible CNAME (votre ALB DNS)
+                                            }'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                                echo "➡️ Réponse API Dynu (Création/Mise à jour): ${apiResponse}"
+
+                                def responseStatusCode = sh(script: "echo '${apiResponse}' | jq -r '.statusCode'", returnStdout: true).trim()
+
+                                if (responseStatusCode == "200") {
+                                    echo "  ✅ Enregistrement CNAME pour ${sub}.${env.DOMAIN_NAME} mis à jour/créé avec succès."
+                                } else {
+                                    echo "  ❌ Échec de la création/mise à jour de l'enregistrement CNAME pour ${sub}.${env.DOMAIN_NAME}. Statut: ${responseStatusCode}, Réponse complète: ${apiResponse}"
+                                    error "Échec de la mise à jour/création de l'enregistrement DNS."
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+        stage('Run tests') {
+            parallel {
+                stage('Health check') {
+                    agent {
+                        docker {
+                            image 'socksshop/kubectl-curl:latest'
+                        }
+                    }
+                    environment {
+                        DOMAIN_NAME = credentials('DOMAIN_NAME')
+                    }
+                    steps {
+                        script {
+                            sh '''
+                            sleep 180
+                            curl -s -o /dev/null -w "%{http_code}" http://www.${DOMAIN_NAME} | grep 200
+                            curl http://www.${DOMAIN_NAME} | grep "WeaveSocks"
+                            '''
+                        }
+                    }
+                }
+
+                stage('Endpoints tests') {
+                    agent {
+                        docker {
+                            image 'socksshop/aws-cli-curl-node-kubectl-yarn-jq:latest'
+                            args '-u root -v $HOME/.kube:/root/.kube'
+                        }
+                    }
+                    steps {
+                        script {
+                            withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                                sh '''
+                                aws eks --region $AWS_REGION update-kubeconfig --name $CLUSTER_NAME
+                                chmod 600 /root/.kube/config
+                                kubectl config current-context
+
+                                POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l name=front-end --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+                                kubectl exec -n ${NAMESPACE} $POD_NAME -- yarn test:endpoints
+                                '''
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+
+        stage('Post-deployment managment') {
+            agent {
+                docker {
+                    image 'socksshop/aws-cli-git-kubectl-helm:latest'
+                    args '-u root -v $HOME/.kube:/root/.kube'
+                }
+            }
+            steps {
+                withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    script {
+                        def userChoice = input(
+                            id: 'userInput', message: 'Que souhaitez-vous faire avec le déploiement EKS du frontend?',
+                            parameters: [
+                                choice(
+                                    name: 'ACTION',
+                                    choices: ['Continuer', 'Rollback', 'Destroy'],
+                                    description: 'Choisissez une action à effectuer'
+                                )
+                            ]
+                        )
+
+                        sh '''
+                        aws eks --region $AWS_REGION update-kubeconfig --name $CLUSTER_NAME
+                        chmod 600 /root/.kube/config
+                        kubectl config current-context
+                        '''
+
+                        if (userChoice == 'Destroy') {
+                            echo "Destruction du déploiement..."
+                            sh '''
+                            helm uninstall $RELEASE_NAME --wait --namespace $NAMESPACE
+                            helm uninstall sockshop-monitoring --wait --namespace monitoring
+                            kubectl get all -n $NAMESPACE
+                            kubectl get all -n monitoring
+                            '''
+                        } else if (userChoice == 'Rollback') {
+                            echo "Rollback du déploiement..."
+                            sh '''
+                            helm rollback $RELEASE_NAME 0 --wait --namespace $NAMESPACE || echo "Aucune révision précédente disponible pour rollback"
+                            helm rollback sockshop-monitoring 0 --wait --namespace monitoring || echo "Aucune révision précédente disponible pour rollback"
+                            kubectl get all -n $NAMESPACE
+                            kubectl get all -n monitoring
+                            '''
+                        } else {
+                            echo "Aucune action effectuée."
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+}

@@ -1,0 +1,53 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: orders-db
+  labels:
+    name: orders-db
+spec:
+  serviceName: "orders-db-headless"
+  replicas: {{ .Values.ordersdb.replicas }}
+  selector:
+    matchLabels:
+      name: orders-db
+  template:
+    metadata:
+      labels:
+        name: orders-db
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: orders-db
+        image: {{if .Values.global.registry}}{{ .Values.global.registry }}/{{end}}{{ .Values.ordersdb.image.repo }}:{{ .Values.ordersdb.image.tag }}
+        ports:
+        - name: mongo
+          containerPort: 27017
+        resources:
+{{ toYaml .Values.ordersdb.resources | indent 10 }}
+        securityContext:
+          runAsUser: 999
+          capabilities:
+            drop:
+              - all
+            add:
+              - CHOWN
+              - SETGID
+              - SETUID
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /data/db
+          name: orders-db-storage
+  volumeClaimTemplates:
+  - metadata:
+      name: orders-db-storage
+      labels:
+        app: orders-db
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: gp3
+      resources:
+        requests:
+          storage: 1Gi

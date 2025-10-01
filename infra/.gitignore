@@ -1,0 +1,31 @@
+# Fichiers/dossiers Terraform
+.terraform/
+infrastructure/.terraform/
+cluster-config/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+crash.log
+*.log
+
+# Fichiers sensibles
+*.pem
+
+# Exemple : clé SSH dans ton projet
+infrastructure/keypair/sockshop-keypair.pem
+
+# Fichiers de sortie ou artefacts temporaires
+*.out
+
+# MacOS / OS spécifiques
+.DS_Store
+
+# VSCode ou autres éditeurs
+.vscode/
+.idea/
+*.swp
+
+# Others
+clean-pvs.sh
+set-secrets-aws.sh
+credentials-to-set.txt

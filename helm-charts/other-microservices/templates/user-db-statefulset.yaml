@@ -1,0 +1,53 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: user-db
+  labels:
+    name: user-db
+spec:
+  serviceName: "user-db-headless"
+  replicas: {{ .Values.userdb.replicas }}
+  selector:
+    matchLabels:
+      name: user-db
+  template:
+    metadata:
+      labels:
+        name: user-db
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: user-db
+        image: {{if .Values.global.registry}}{{ .Values.global.registry }}/{{end}}{{ .Values.userdb.image.repo }}:{{ .Values.userdb.image.tag }}
+        ports:
+        - name: mongo
+          containerPort: 27017
+        resources:
+{{ toYaml .Values.userdb.resources | indent 10 }}
+        securityContext:
+          runAsUser: 999
+          capabilities:
+            drop:
+              - all
+            add:
+              - CHOWN
+              - SETGID
+              - SETUID
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /data/db
+          name: user-db-storage
+  volumeClaimTemplates:
+  - metadata:
+      name: user-db-storage
+      labels:
+        app: user-db
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: gp3
+      resources:
+        requests:
+          storage: 1Gi

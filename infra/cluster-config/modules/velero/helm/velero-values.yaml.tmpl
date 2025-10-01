@@ -1,0 +1,31 @@
+credentials:
+  useSecret: false
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    annotations:
+      eks.amazonaws.com/role-arn: ${velero_role_arn}
+
+configuration:
+  backupStorageLocation:
+    - name: eks-backup
+      provider: aws
+      bucket: ${velero_backup_bucket_name}
+      default: true
+      config:
+        region: ${region}
+
+  volumeSnapshotLocation:
+    - name: eks-backup
+      provider: aws
+      config:
+        region: ${region}
+
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.12.1
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
