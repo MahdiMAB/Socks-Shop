@@ -51,4 +51,3 @@ Ce projet sert de base solide, et mon engagement se poursuit à travers l'explor
 2.  **Gestion des Secrets :** Intégrer **HashiCorp Vault** pour remplacer les secrets statiques et centraliser la gestion des credentials, renforçant ainsi la sécurité de l'architecture.
 3.  **Optimisations Kubernetes :** Réaliser des ajustements dans les manifestes K8s (Helm charts) pour améliorer la résilience, l'efficacité des ressources (requests/limits) et l'alignement avec les meilleures pratiques.
 
-L'objectif est de toujours maintenir ce dépôt comme une solution de référence, démontrant mon engagement pour l'**amélioration continue** de la qualité logicielle et opérationnelle.
